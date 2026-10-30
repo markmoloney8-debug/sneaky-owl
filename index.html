@@ -41,6 +41,7 @@ button:focus-visible{outline:4px solid var(--ink);outline-offset:3px}
 .levels button[aria-pressed="true"]{background:var(--ink);color:var(--night)}
 #word{font-size:clamp(3rem,17vw,6rem);font-weight:800;line-height:1;letter-spacing:.02em}
 #stats{font-size:1.1rem;font-variant-numeric:tabular-nums}
+#sound{position:fixed;top:calc(10px + env(safe-area-inset-top,0px));right:12px;font-size:.85rem;padding:6px 12px;background:rgba(0,0,0,.25);color:var(--ink)}
 /* owl */
 .perch{perspective:800px;flex:1;display:flex;align-items:center;justify-content:center;min-height:0;width:100%}
 .owl{position:relative;width:min(52vw,36vh,260px);aspect-ratio:5/6;transform-style:preserve-3d;
@@ -110,6 +111,7 @@ video{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
     <div id="word">SNEAK</div>
     <div id="stats">0.0s · caught 0 times</div>
   </div>
+  <button id="sound" aria-pressed="true">Sound on</button>
   <div class="perch">
     <div class="owl" id="owl">
       <div class="side front"><div class="belly"></div><div class="eye l"></div><div class="eye r"></div><div class="beak"></div></div>
@@ -129,6 +131,129 @@ video{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
 </section>
 
 <script>
+/* Sound: everything is synthesised once into audio buffers using physical-style models
+   (Karplus-Strong plucked strings, breathy hoots, swept-noise rustles) so nothing sounds like a beep. */
+var SFX=(function(){
+  var AC=null, master=null, bus=null, cache={}, B={}, step=0, nextT=0, timer=null, muted=false;
+  var EIGHTH=60/138/2;
+  // 4-bar sneaky tune in D minor (MIDI notes, 0 = rest). Melody in eighths, bass in quarters.
+  var MEL=[62,0,64,65, 0,66,67,0,  69,0,70,69, 0,67,65,0,  67,0,70,0, 74,0,70,67,  73,0,69,0, 64,0,61,0];
+  var BASS=[38,45,38,45, 38,45,38,45, 43,50,43,50, 45,40,45,44];
+
+  function mtof(m){return 440*Math.pow(2,(m-69)/12)}
+  function mk(sec,fill){
+    var sr=AC.sampleRate,n=Math.floor(sec*sr),b=AC.createBuffer(1,n,sr),d=b.getChannelData(0),i,mx=0;
+    fill(d,sr,n);
+    for(i=0;i<n;i++){var a=Math.abs(d[i]);if(a>mx)mx=a}
+    var k=mx?0.9/mx:1,f=Math.min(n,Math.floor(sr*0.015));
+    for(i=0;i<n;i++)d[i]*=k;
+    for(i=0;i<f;i++)d[n-1-i]*=i/f;
+    return b;
+  }
+  function pluck(m,sec,decay){
+    var key=m+':'+sec+':'+decay; if(cache[key]) return cache[key];
+    var fr=mtof(m);
+    return cache[key]=mk(sec,function(d,sr,n){
+      var N=Math.max(2,Math.round(sr/fr)),r=new Float32Array(N),i,p=0,mean=0;
+      for(i=0;i<N;i++)r[i]=Math.random()*2-1;
+      for(var pass=0;pass<2;pass++)for(i=1;i<N;i++)r[i]=(r[i]+r[i-1])*0.5; // soft finger, not a pick
+      for(i=0;i<N;i++)mean+=r[i]; mean/=N; for(i=0;i<N;i++)r[i]-=mean;
+      for(i=0;i<n;i++){var nx=(p+1)%N,y=r[p];r[p]=decay*0.5*(r[p]+r[nx]);d[i]=y;p=nx}
+      var a=Math.floor(sr*0.003);for(i=0;i<a;i++)d[i]*=i/a;
+    });
+  }
+  // a breathy hooting voice added into d, starting at t0 seconds
+  function hoo(d,sr,t0,dur,freq,amp,breath){
+    var ph=0,lp=0,s0=Math.floor(t0*sr),n=Math.floor(dur*sr);
+    for(var i=0;i<n&&s0+i<d.length;i++){
+      var t=i/sr,x=t/dur,e=Math.min(t/0.07,(dur-t)/0.2,1); e=e<0?0:e*e*(3-2*e);
+      ph+=2*Math.PI*freq(x,t)/sr; lp+=0.08*((Math.random()*2-1)-lp);
+      d[s0+i]+=amp*e*(Math.sin(ph)+0.18*Math.sin(2*ph)+0.05*Math.sin(3*ph)+breath*lp*4);
+    }
+  }
+  // band-passed noise with a moving centre: feathers, shakers, whooshes
+  function noise(d,sr,t0,dur,cut,env,q){
+    var low=0,band=0,s0=Math.floor(t0*sr),n=Math.floor(dur*sr);
+    for(var i=0;i<n&&s0+i<d.length;i++){
+      var x=i/n,f=2*Math.sin(Math.PI*Math.min(cut(x),sr/6)/sr);
+      var hi=(Math.random()*2-1)-low-q*band; band+=f*hi; low+=f*band;
+      d[s0+i]+=band*env(x);
+    }
+  }
+  function build(){
+    B.wood=mk(0.18,function(d,sr,n){ // woodblock
+      for(var i=0;i<n;i++){var t=i/sr;d[i]=Math.exp(-t*45)*(Math.sin(2*Math.PI*1150*t)+0.6*Math.sin(2*Math.PI*1830*t))+(t<0.004?(Math.random()*2-1)*0.6:0)}
+    });
+    B.shaker=mk(0.09,function(d,sr){noise(d,sr,0,0.09,function(){return 6500},function(x){return Math.pow(1-x,3)*Math.min(1,x*12)},0.6)});
+    B.rustle=mk(0.5,function(d,sr){
+      noise(d,sr,0,0.5,function(x){return 500+2800*x},function(x){return Math.pow(Math.sin(Math.PI*x),1.5)*(0.6+0.4*Math.random())},0.5);
+    });
+    B.hoot=mk(1.5,function(d,sr){ // "hoo ... HOOOOO" with a quaver at the end, like a tawny owl
+      hoo(d,sr,0,0.34,function(x){return 395+25*x},0.7,0.45);
+      hoo(d,sr,0.5,1.0,function(x,t){return 420+45*Math.sin(Math.PI*Math.min(1,x*1.6))-25*x+(x>0.45?9*Math.sin(2*Math.PI*7*t):0)},1,0.45);
+    });
+    B.caught=mk(1.9,function(d,sr){
+      // slide whistle falling
+      hoo(d,sr,0,0.75,function(x,t){return 1300*Math.pow(300/1300,x)*(1+0.02*Math.sin(2*Math.PI*6*t))},0.55,0.3);
+      // soft drum thump
+      var s0=Math.floor(0.74*sr),lp=0;
+      for(var i=0;i<sr*0.6&&s0+i<d.length;i++){var t=i/sr;lp+=0.2*((Math.random()*2-1)-lp);
+        d[s0+i]+=Math.exp(-t*7)*Math.sin(2*Math.PI*(60*t+80*(1-Math.exp(-t*30))/30))*0.9+Math.exp(-t*50)*lp*1.2}
+      // owl chuckle
+      [480,455,430].forEach(function(f,k){hoo(d,sr,1.05+k*0.21,0.16,function(){return f},0.45,0.5)});
+    });
+    B.bell=mk(1.8,function(d,sr,n){
+      var f=1175;for(var i=0;i<n;i++){var t=i/sr;
+        d[i]=Math.exp(-t*2.2)*Math.sin(2*Math.PI*f*t)+0.4*Math.exp(-t*5)*Math.sin(2*Math.PI*f*2.76*t)+0.2*Math.exp(-t*9)*Math.sin(2*Math.PI*f*5.4*t)}
+    });
+    var conv=AC.createConvolver(),sr=AC.sampleRate,len=Math.floor(sr*1.4),ir=AC.createBuffer(2,len,sr);
+    for(var c=0;c<2;c++){var ch=ir.getChannelData(c);for(var i=0;i<len;i++)ch[i]=(Math.random()*2-1)*Math.pow(1-i/len,3)}
+    conv.buffer=ir; var wet=AC.createGain(); wet.gain.value=0.22;
+    master.connect(conv); conv.connect(wet); wet.connect(AC.destination);
+  }
+  function play(b,when,g,dest){
+    var s=AC.createBufferSource(),gn=AC.createGain(); s.buffer=b; gn.gain.value=g;
+    s.connect(gn); gn.connect(dest||master); s.start(when||AC.currentTime); return s;
+  }
+  function tick(){
+    while(nextT<AC.currentTime+0.15){
+      var m=MEL[step%32]; if(m) play(pluck(m,0.45,0.994),nextT,0.42,bus);
+      if(step%2===0) play(pluck(BASS[(step/2)%16],0.7,0.993),nextT,0.7,bus);
+      else play(B.shaker,nextT,0.1,bus);
+      step++; nextT+=EIGHTH;
+    }
+  }
+  return {
+    init:function(){
+      if(!AC){
+        try{AC=new (window.AudioContext||window.webkitAudioContext)()}catch(e){return}
+        master=AC.createGain(); master.connect(AC.destination); build();
+      }
+      if(AC.state==='suspended') AC.resume();
+    },
+    musicOn:function(){
+      if(!AC) return; this.musicOff();
+      bus=AC.createGain(); bus.gain.value=1; bus.connect(master);
+      nextT=AC.currentTime+0.05; tick(); timer=setInterval(tick,30);
+    },
+    musicOff:function(){
+      if(!AC||!bus) return; clearInterval(timer);
+      var old=bus; old.gain.setTargetAtTime(0,AC.currentTime,0.015); bus=null;
+      setTimeout(function(){old.disconnect()},400);
+    },
+    wood:function(){AC&&play(B.wood,0,0.6)},
+    rustle:function(g){AC&&play(B.rustle,0,g||0.7)},
+    turn:function(){if(!AC)return; play(B.rustle,0,0.8); play(B.hoot,AC.currentTime+0.12,1)},
+    caught:function(){AC&&play(B.caught,0,1)},
+    win:function(){
+      if(!AC)return; var t=AC.currentTime;
+      [62,65,69,74].forEach(function(m,i){play(pluck(m,0.9,0.996),t+i*0.09,0.6)});
+      play(pluck(50,1.2,0.996),t+0.36,0.6); play(B.bell,t+0.4,0.5);
+    },
+    toggle:function(){muted=!muted; if(master) master.gain.value=muted?0:1; return muted}
+  };
+})();
+
 (function(){
   var $=function(id){return document.getElementById(id)};
   var video=$('cam'), owl=$('owl'), word=$('word'), stats=$('stats'), bar=$('bar'), mark=$('mark');
@@ -136,22 +261,11 @@ video{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
   var sctx=small.getContext('2d',{willReadFrequently:true});
   var state='idle', threshold=0.04, prev=null, hits=0, graceUntil=0;
   var turnTimer=null, peekTimer=null, countTimer=null, sampleTimer=null;
-  var caughtCount=0, startTime=0, audio=null;
+  var caughtCount=0, startTime=0;
   var METER_MAX=0.2;
 
   function show(id){['start','wait','game','win'].forEach(function(s){$(s).hidden=(s!==id)})}
   function rand(a,b){return a+Math.random()*(b-a)}
-  function beep(freq,len){
-    try{
-      audio=audio||new (window.AudioContext||window.webkitAudioContext)();
-      var o=audio.createOscillator(), g=audio.createGain();
-      o.frequency.value=freq; o.type='triangle'; g.gain.value=0.15;
-      o.connect(g); g.connect(audio.destination); o.start();
-      g.gain.exponentialRampToValueAtTime(0.001,audio.currentTime+len);
-      o.stop(audio.currentTime+len);
-    }catch(e){}
-  }
-
   // --- difficulty
   document.querySelectorAll('.levels button').forEach(function(b){
     b.addEventListener('click',function(){
@@ -162,7 +276,7 @@ video{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
 
   // --- camera
   $('begin').addEventListener('click',function(){
-    beep(600,.1);
+    SFX.init(); SFX.wood();
     if(video.srcObject){newGame();return}
     if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){
       $('note').textContent='This browser will not share the camera here. Open the game from an https:// address and try again.';return;
@@ -204,22 +318,23 @@ video{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
   function newGame(){caughtCount=0; startTime=0; countdown('Get to the start!','Walk to the far side of the room.',5,false)}
 
   function countdown(title,text,secs,withSnap){
-    clearTimers(); state='wait'; document.body.className='';
+    clearTimers(); SFX.musicOff(); state='wait'; document.body.className='';
     $('waitTitle').textContent=title; $('waitText').textContent=text; $('snap').hidden=!withSnap;
     var n=secs; $('count').textContent=n; show('wait');
     countTimer=setInterval(function(){
       n--; $('count').textContent=n;
       if(n<=0){clearInterval(countTimer); if(!startTime) startTime=performance.now(); show('game'); mark.style.left=(threshold/METER_MAX*100)+'%'; turnAway()}
-      else beep(440,.08);
+      else SFX.wood();
     },1000);
   }
 
   function turnAway(){
     state='back'; owl.className='owl'; document.body.className='sneak'; word.textContent='SNEAK';
+    SFX.rustle(0.5); SFX.musicOn();
     var wait=rand(2200,5200);
     if(Math.random()<0.4){ // fake-out: half a turn, then back again
       peekTimer=setTimeout(function(){
-        owl.classList.add('peek'); beep(520,.08);
+        owl.classList.add('peek'); SFX.rustle(0.45);
         peekTimer=setTimeout(function(){owl.classList.remove('peek')},450);
       },wait*rand(0.3,0.6));
     }
@@ -228,17 +343,17 @@ video{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
   function turnRound(){
     clearTimeout(peekTimer);
     state='front'; owl.className='owl facing'; document.body.className='freeze'; word.textContent='FREEZE';
-    hits=0; graceUntil=performance.now()+750; beep(880,.15);
+    hits=0; graceUntil=performance.now()+750; SFX.musicOff(); SFX.turn();
     turnTimer=setTimeout(turnAway,rand(1800,4000));
   }
   function caught(){
-    caughtCount++; beep(180,.5);
+    caughtCount++; SFX.musicOff(); SFX.caught();
     var c=$('snap'), x=c.getContext('2d');
     x.save(); x.translate(c.width,0); x.scale(-1,1); x.drawImage(video,0,0,c.width,c.height); x.restore();
     countdown('Caught you!','Back to the start. The owl saw you move.',6,true);
   }
   function won(){
-    clearTimers(); state='won'; document.body.className=''; beep(660,.12); setTimeout(function(){beep(990,.3)},130);
+    clearTimers(); SFX.musicOff(); state='won'; document.body.className=''; SFX.win();
     var t=((performance.now()-startTime)/1000).toFixed(1);
     $('result').textContent='You reached the owl in '+t+' seconds and got caught '+caughtCount+(caughtCount===1?' time.':' times.');
     show('win');
@@ -248,8 +363,9 @@ video{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
     if(state==='back') won();
     else if(state==='front') caught();
   });
-  $('again').addEventListener('click',newGame);
-  $('home').addEventListener('click',function(){clearTimers(); state='idle'; $('begin').textContent='Start'; show('start')});
+  $('again').addEventListener('click',function(){SFX.init(); newGame()});
+  $('sound').addEventListener('click',function(){var m=SFX.toggle(); this.textContent=m?'Sound off':'Sound on'; this.setAttribute('aria-pressed',String(!m))});
+  $('home').addEventListener('click',function(){clearTimers(); SFX.musicOff(); state='idle'; $('begin').textContent='Start'; show('start')});
 })();
 </script>
 </body>
