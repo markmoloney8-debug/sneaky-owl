@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>Sneaky Owl</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;800&display=swap">
+<style>
+/* Layout: one full-screen stage. The whole screen colour is the signal, readable from across a room. */
+:root{
+  --sneak:#1f6f5c;      /* owl's back is turned */
+  --freeze:#c8442f;     /* owl is watching */
+  --night:#16263a;      /* menus */
+  --ink:#fff8e7;
+  --owl:#8a5a3b;
+  --owl-dark:#5e3b25;
+  --belly:#f1d9a7;
+  --button:#ffd23f;
+  --button-ink:#3a2a00;
+  --font:"Baloo 2","Trebuchet MS","Segoe UI",system-ui,sans-serif;
+  color-scheme:dark;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;margin:0}
+body{background:var(--night);color:var(--ink);font-family:var(--font);overflow:hidden;
+  transition:background .35s;touch-action:manipulation;user-select:none;-webkit-user-select:none}
+body.sneak{background:var(--sneak)}
+body.freeze{background:var(--freeze)}
+[hidden]{display:none!important}
+.screen{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:space-between;gap:12px;
+  padding:calc(16px + env(safe-area-inset-top,0px)) 20px calc(16px + env(safe-area-inset-bottom,0px));text-align:center}
+h1{font-size:clamp(2.4rem,11vw,4rem);line-height:1;margin:0;font-weight:800}
+p{font-size:1.1rem;line-height:1.35;margin:0;max-width:34ch}
+.small{font-size:.95rem;opacity:.85}
+ol{text-align:left;font-size:1.1rem;line-height:1.35;margin:0;padding-left:1.3em;max-width:32ch;display:grid;gap:6px}
+button{font-family:inherit;font-weight:800;border:0;border-radius:999px;cursor:pointer;color:var(--button-ink);background:var(--button)}
+button:focus-visible{outline:4px solid var(--ink);outline-offset:3px}
+.go{font-size:1.5rem;padding:16px 36px}
+.levels{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
+.levels button{font-size:1rem;padding:8px 18px;background:transparent;color:var(--ink);border:2px solid var(--ink)}
+.levels button[aria-pressed="true"]{background:var(--ink);color:var(--night)}
+#word{font-size:clamp(3rem,17vw,6rem);font-weight:800;line-height:1;letter-spacing:.02em}
+#stats{font-size:1.1rem;font-variant-numeric:tabular-nums}
+/* owl */
+.perch{perspective:800px;flex:1;display:flex;align-items:center;justify-content:center;min-height:0;width:100%}
+.owl{position:relative;width:min(52vw,36vh,260px);aspect-ratio:5/6;transform-style:preserve-3d;
+  transition:transform .45s cubic-bezier(.5,1.6,.5,1);transform:rotateY(180deg)}
+.owl.facing{transform:rotateY(0)}
+.owl.peek{transform:rotateY(125deg)}
+.side{position:absolute;inset:0;border-radius:48% 48% 44% 44%;backface-visibility:hidden;-webkit-backface-visibility:hidden;background:var(--owl)}
+.side::before,.side::after{content:"";position:absolute;top:-6%;width:26%;height:22%;background:var(--owl);border-radius:60% 10% 0 0}
+.side::before{left:6%;transform:rotate(-14deg)}
+.side::after{right:6%;transform:rotate(14deg) scaleX(-1)}
+.back{transform:rotateY(180deg);
+  background:radial-gradient(circle at 50% 120%,transparent 0 36%,var(--owl-dark) 37% 39%,transparent 40%) 0 0/34% 20%,var(--owl)}
+.belly{position:absolute;left:20%;right:20%;bottom:6%;height:46%;background:var(--belly);border-radius:50%}
+.eye{position:absolute;top:18%;width:36%;aspect-ratio:1;background:#fff;border-radius:50%;border:5px solid var(--owl-dark)}
+.eye::after{content:"";position:absolute;inset:28%;background:#111;border-radius:50%}
+.eye.l{left:11%}.eye.r{right:11%}
+.beak{position:absolute;left:50%;top:45%;width:0;height:0;transform:translateX(-50%);
+  border-left:12px solid transparent;border-right:12px solid transparent;border-top:20px solid var(--button)}
+/* meter */
+.meter{width:min(70%,280px);height:12px;border-radius:99px;background:rgba(0,0,0,.3);overflow:hidden;position:relative}
+#bar{height:100%;width:0;background:var(--ink);border-radius:99px}
+#mark{position:absolute;top:0;bottom:0;width:3px;background:var(--button)}
+#stop{width:100%;max-width:520px;height:min(30vh,220px);font-size:clamp(3rem,16vw,5rem);border-radius:36px;
+  box-shadow:0 10px 0 rgba(0,0,0,.3)}
+#stop:active{transform:translateY(6px);box-shadow:0 4px 0 rgba(0,0,0,.3)}
+/* overlays */
+.overlay{position:fixed;inset:0;z-index:5;background:var(--night)}
+#snap{width:min(80vw,340px);border-radius:20px;border:6px solid var(--ink);transform:rotate(-3deg)}
+#count{font-size:clamp(5rem,30vw,10rem);font-weight:800;line-height:1}
+video{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
+@media (prefers-reduced-motion:reduce){.owl{transition:none}body{transition:none}}
+</style>
+</head>
+<body>
+
+<video id="cam" playsinline muted></video>
+
+<!-- Start -->
+<section class="screen" id="start">
+  <h1>Sneaky Owl</h1>
+  <ol>
+    <li>Lean the phone against something so the owl can see the room.</li>
+    <li>Walk to the far side of the room.</li>
+    <li>Sneak up while the owl looks away. Freeze when it turns round.</li>
+    <li>Press STOP before the owl catches you.</li>
+  </ol>
+  <div class="levels" role="group" aria-label="How sharp are the owl's eyes?">
+    <button id="lv-easy" data-t="0.08" aria-pressed="false">Sleepy owl</button>
+    <button id="lv-mid" data-t="0.04" aria-pressed="true">Normal owl</button>
+    <button id="lv-hard" data-t="0.018" aria-pressed="false">Eagle-eyed</button>
+  </div>
+  <button class="go" id="begin">Start the camera</button>
+  <p class="small" id="note">The camera is only used to spot movement. Nothing is recorded and nothing leaves this phone.</p>
+</section>
+
+<!-- Countdown / caught -->
+<section class="screen overlay" id="wait" hidden>
+  <h1 id="waitTitle">Get to the start!</h1>
+  <canvas id="snap" width="320" height="240" hidden></canvas>
+  <div id="count">5</div>
+  <p id="waitText">Walk to the far side of the room.</p>
+</section>
+
+<!-- Game -->
+<section class="screen" id="game" hidden>
+  <div>
+    <div id="word">SNEAK</div>
+    <div id="stats">0.0s · caught 0 times</div>
+  </div>
+  <div class="perch">
+    <div class="owl" id="owl">
+      <div class="side front"><div class="belly"></div><div class="eye l"></div><div class="eye r"></div><div class="beak"></div></div>
+      <div class="side back"></div>
+    </div>
+  </div>
+  <div class="meter" aria-hidden="true"><div id="bar"></div><div id="mark"></div></div>
+  <button id="stop">STOP</button>
+</section>
+
+<!-- Win -->
+<section class="screen overlay" id="win" hidden>
+  <h1>You did it!</h1>
+  <p id="result"></p>
+  <button class="go" id="again">Play again</button>
+  <button class="go" id="home" style="background:transparent;color:var(--ink);border:2px solid var(--ink);font-size:1.1rem">Change difficulty</button>
+</section>
+
+<script>
+(function(){
+  var $=function(id){return document.getElementById(id)};
+  var video=$('cam'), owl=$('owl'), word=$('word'), stats=$('stats'), bar=$('bar'), mark=$('mark');
+  var W=64,H=48, small=document.createElement('canvas'); small.width=W; small.height=H;
+  var sctx=small.getContext('2d',{willReadFrequently:true});
+  var state='idle', threshold=0.04, prev=null, hits=0, graceUntil=0;
+  var turnTimer=null, peekTimer=null, countTimer=null, sampleTimer=null;
+  var caughtCount=0, startTime=0, audio=null;
+  var METER_MAX=0.2;
+
+  function show(id){['start','wait','game','win'].forEach(function(s){$(s).hidden=(s!==id)})}
+  function rand(a,b){return a+Math.random()*(b-a)}
+  function beep(freq,len){
+    try{
+      audio=audio||new (window.AudioContext||window.webkitAudioContext)();
+      var o=audio.createOscillator(), g=audio.createGain();
+      o.frequency.value=freq; o.type='triangle'; g.gain.value=0.15;
+      o.connect(g); g.connect(audio.destination); o.start();
+      g.gain.exponentialRampToValueAtTime(0.001,audio.currentTime+len);
+      o.stop(audio.currentTime+len);
+    }catch(e){}
+  }
+
+  // --- difficulty
+  document.querySelectorAll('.levels button').forEach(function(b){
+    b.addEventListener('click',function(){
+      document.querySelectorAll('.levels button').forEach(function(x){x.setAttribute('aria-pressed','false')});
+      b.setAttribute('aria-pressed','true'); threshold=parseFloat(b.dataset.t);
+    });
+  });
+
+  // --- camera
+  $('begin').addEventListener('click',function(){
+    beep(600,.1);
+    if(video.srcObject){newGame();return}
+    if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){
+      $('note').textContent='This browser will not share the camera here. Open the game from an https:// address and try again.';return;
+    }
+    navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:{ideal:320},height:{ideal:240}},audio:false})
+      .then(function(stream){
+        video.srcObject=stream; return video.play();
+      }).then(function(){
+        if(navigator.wakeLock){navigator.wakeLock.request('screen').catch(function(){})}
+        sampleTimer=setInterval(sample,100);
+        newGame();
+      }).catch(function(){
+        $('note').textContent='The owl needs the camera to play. Allow camera access for this page, then press Start again.';
+      });
+  });
+
+  // --- motion: share of pixels that changed since the last frame
+  function sample(){
+    if(video.readyState<2) return;
+    sctx.drawImage(video,0,0,W,H);
+    var d=sctx.getImageData(0,0,W,H).data, n=W*H, cur=new Uint8Array(n), changed=0;
+    for(var i=0;i<n;i++){
+      var j=i*4; cur[i]=(d[j]*3+d[j+1]*6+d[j+2])/10;
+      if(prev && Math.abs(cur[i]-prev[i])>26) changed++;
+    }
+    var motion=prev?changed/n:0; prev=cur;
+    bar.style.width=Math.min(100,motion/METER_MAX*100)+'%';
+    if(state==='front' && performance.now()>graceUntil){
+      hits=motion>threshold?hits+1:0;
+      if(hits>=2) caught();
+    }
+    if(state==='back'||state==='front'){
+      stats.textContent=((performance.now()-startTime)/1000).toFixed(1)+'s · caught '+caughtCount+(caughtCount===1?' time':' times');
+    }
+  }
+
+  // --- game flow
+  function clearTimers(){clearTimeout(turnTimer);clearTimeout(peekTimer);clearInterval(countTimer)}
+  function newGame(){caughtCount=0; startTime=0; countdown('Get to the start!','Walk to the far side of the room.',5,false)}
+
+  function countdown(title,text,secs,withSnap){
+    clearTimers(); state='wait'; document.body.className='';
+    $('waitTitle').textContent=title; $('waitText').textContent=text; $('snap').hidden=!withSnap;
+    var n=secs; $('count').textContent=n; show('wait');
+    countTimer=setInterval(function(){
+      n--; $('count').textContent=n;
+      if(n<=0){clearInterval(countTimer); if(!startTime) startTime=performance.now(); show('game'); mark.style.left=(threshold/METER_MAX*100)+'%'; turnAway()}
+      else beep(440,.08);
+    },1000);
+  }
+
+  function turnAway(){
+    state='back'; owl.className='owl'; document.body.className='sneak'; word.textContent='SNEAK';
+    var wait=rand(2200,5200);
+    if(Math.random()<0.4){ // fake-out: half a turn, then back again
+      peekTimer=setTimeout(function(){
+        owl.classList.add('peek'); beep(520,.08);
+        peekTimer=setTimeout(function(){owl.classList.remove('peek')},450);
+      },wait*rand(0.3,0.6));
+    }
+    turnTimer=setTimeout(turnRound,wait);
+  }
+  function turnRound(){
+    clearTimeout(peekTimer);
+    state='front'; owl.className='owl facing'; document.body.className='freeze'; word.textContent='FREEZE';
+    hits=0; graceUntil=performance.now()+750; beep(880,.15);
+    turnTimer=setTimeout(turnAway,rand(1800,4000));
+  }
+  function caught(){
+    caughtCount++; beep(180,.5);
+    var c=$('snap'), x=c.getContext('2d');
+    x.save(); x.translate(c.width,0); x.scale(-1,1); x.drawImage(video,0,0,c.width,c.height); x.restore();
+    countdown('Caught you!','Back to the start. The owl saw you move.',6,true);
+  }
+  function won(){
+    clearTimers(); state='won'; document.body.className=''; beep(660,.12); setTimeout(function(){beep(990,.3)},130);
+    var t=((performance.now()-startTime)/1000).toFixed(1);
+    $('result').textContent='You reached the owl in '+t+' seconds and got caught '+caughtCount+(caughtCount===1?' time.':' times.');
+    show('win');
+  }
+
+  $('stop').addEventListener('click',function(){
+    if(state==='back') won();
+    else if(state==='front') caught();
+  });
+  $('again').addEventListener('click',newGame);
+  $('home').addEventListener('click',function(){clearTimers(); state='idle'; $('begin').textContent='Start'; show('start')});
+})();
+</script>
+</body>
+</html>
